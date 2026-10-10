@@ -283,6 +283,8 @@ const char index_html[] PROGMEM = R"rawliteral(
     $('driveText').textContent = `V: ${curV} \u00B7 S: ${curS} steps/s`;
   }
 
+  let driveInterval = null;
+
   function transmitDrive() {
     if (ws && ws.readyState === WebSocket.OPEN) {
       const scale = Number($('scale').value) / 100;
@@ -306,11 +308,17 @@ const char index_html[] PROGMEM = R"rawliteral(
 
   function stopJoy(e) {
     if (pointer !== null && (e ? e.pointerId === pointer : true)) {
-      if (pointer !== null && pad.hasPointerCapture(pointer)) pad.releasePointerCapture(pointer);
+      if (pointer !== null && pad.hasPointerCapture(pointer)) {
+        try { pad.releasePointerCapture(pointer); } catch (err) {}
+      }
       pointer = null;
+      if (driveInterval) {
+        clearInterval(driveInterval);
+        driveInterval = null;
+      }
       joyX = 0; joyY = 0;
       renderJoy();
-      transmitDrive();
+      transmitDrive(); // Send neutral stop
     }
   }
 
@@ -318,13 +326,19 @@ const char index_html[] PROGMEM = R"rawliteral(
     if (pointer !== null || (e.pointerType === 'mouse' && e.button !== 0)) return;
     e.preventDefault();
     pointer = e.pointerId;
-    pad.setPointerCapture(pointer);
+    try { pad.setPointerCapture(pointer); } catch (err) {}
     moveJoy(e);
+    transmitDrive();
+    if (!driveInterval) {
+      driveInterval = setInterval(transmitDrive, 50);
+    }
   };
   pad.onpointermove = moveJoy;
   pad.onpointerup = stopJoy;
   pad.onpointercancel = stopJoy;
   window.addEventListener('blur', () => stopJoy(null));
+  window.addEventListener('pagehide', () => stopJoy(null));
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stopJoy(null); });
 
   $('scale').oninput = () => {
     $('scaleValue').textContent = $('scale').value + '%';
@@ -446,3 +460,4 @@ const char index_html[] PROGMEM = R"rawliteral(
 </body>
 </html>
 )rawliteral";
+

@@ -2,10 +2,10 @@
 #include <Kalman.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h> // NEW: Async Web Server
-
-// Include ESP32 Version checker for the Timer API updates
+#include <ESPAsyncWebServer.h> // Async Web Server
 #include <esp_arduino_version.h> 
+
+#include "web_page.h" // Upgraded Web UI and Telemetry Dashboard 
 
 // --- Wi-Fi & Web Server Settings ---
 const char* ssid = "TeethutBOT_AP";
@@ -142,151 +142,45 @@ float pitchAngle = 0.0;
 
 TaskHandle_t ControlLoopTask;
 
-// --- HTML/JS Web UI (UPDATED FOR SYSTEM SETTINGS) ---
-const char index_html[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <style>
-    body { background-color: #222; color: #fff; text-align: center; font-family: Arial; margin: 0; padding: 10px; overflow: hidden; touch-action: none; }
-    h3 { margin: 5px 0; font-size: 16px; color: #00d2ff; }
-    .pid-panel { background: #333; padding: 10px; border-radius: 10px; margin: 5px auto; max-width: 350px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); }
-    .pid-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-    .pid-group { display: flex; flex-direction: column; align-items: center; flex: 1; margin: 0 2px;}
-    .pid-group label { font-size: 10px; color: #aaa; margin-bottom: 2px; }
-    .pid-group input { width: 100%; box-sizing: border-box; padding: 6px; border: none; border-radius: 4px; background: #222; color: #00d2ff; text-align: center; font-size: 13px; }
-    .update-btn { background: #00d2ff; color: #222; font-weight: bold; border: none; padding: 12px; border-radius: 5px; cursor: pointer; width: 100%; margin-top: 5px; font-size: 14px; }
-    .update-btn:active { background: #008cb3; }
-    #status { font-size: 12px; color: #ff4444; margin-bottom: 5px; }
-    #joystick-container { width: 260px; height: 260px; background: #444; border-radius: 15px; margin: 10px auto; position: relative; box-shadow: inset 0 0 15px rgba(0,0,0,0.8); border: 2px solid #555; }
-    #knob { width: 80px; height: 80px; background: #00d2ff; border-radius: 50%; position: absolute; top: 90px; left: 90px; pointer-events: none; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
-  </style>
-</head>
-<body>
-  <div id="status">Disconnected</div>
-  <div class="pid-panel">
-    <h3>Inner Loop (Balance)</h3>
-    <div class="pid-row">
-      <div class="pid-group"><label>Kp</label><input type="text" id="kp1" inputmode="decimal"></div>
-      <div class="pid-group"><label>Ki</label><input type="text" id="ki1" inputmode="decimal"></div>
-      <div class="pid-group"><label>Kd</label><input type="text" id="kd1" inputmode="decimal"></div>
-    </div>
-    <h3>Outer Loop (Speed)</h3>
-    <div class="pid-row">
-      <div class="pid-group"><label>Kp</label><input type="text" id="kp2" inputmode="decimal"></div>
-      <div class="pid-group"><label>Ki</label><input type="text" id="ki2" inputmode="decimal"></div>
-      <div class="pid-group"><label>Kd</label><input type="text" id="kd2" inputmode="decimal"></div>
-    </div>
-    <h3>System Settings</h3>
-    <div class="pid-row">
-      <div class="pid-group"><label>Ang. Offset</label><input type="text" id="ao" inputmode="decimal"></div>
-      <div class="pid-group"><label>Max Accel</label><input type="text" id="ma" inputmode="decimal"></div>
-      <div class="pid-group"><label>Max Spd</label><input type="text" id="msps" inputmode="decimal"></div>
-    </div>
-    <button id="btnUpdate" class="update-btn" onclick="sendPID()">UPDATE ALL SETTINGS</button>
-  </div>
-
-  <div id="joystick-container"><div id="knob"></div></div>
-
-  <script>
-  let gateway = `ws://${window.location.hostname}/ws`;
-  let websocket;
-  let isDragging = false;
-  const maxSpeed = 3000; const maxSteer = 800; const limit = 130;
-  let curV = 0, curS = 0, interval = null;
-
-  // --- WebSocket Setup ---
-  function initWebSocket() {
-    websocket = new WebSocket(gateway);
-    websocket.onopen = () => { document.getElementById('status').innerText = "Connected"; document.getElementById('status').style.color = "#00ff88"; };
-    websocket.onclose = () => { document.getElementById('status').innerText = "Disconnected"; document.getElementById('status').style.color = "#ff4444"; setTimeout(initWebSocket, 2000); };
-  }
-  
-  function loadPID() {
-    fetch('/get_pid')
-      .then(r => r.json())
-      .then(d => {
-        document.getElementById('kp1').value = d.kp1; document.getElementById('ki1').value = d.ki1; document.getElementById('kd1').value = d.kd1;
-        document.getElementById('kp2').value = d.kp2; document.getElementById('ki2').value = d.ki2; document.getElementById('kd2').value = d.kd2;
-        document.getElementById('ao').value = d.ao;   document.getElementById('ma').value = d.ma;   document.getElementById('msps').value = d.msps;
-      }).catch(e => console.log("Init fetch failed"));
-  }
-
-  window.onload = () => { initWebSocket(); loadPID(); };
-
-  async function sendPID() {
-    const btn = document.getElementById('btnUpdate');
-    btn.innerText = "UPDATING..."; btn.style.background = "#ff9900";
-    const p1 = document.getElementById('kp1').value; const i1 = document.getElementById('ki1').value; const d1 = document.getElementById('kd1').value;
-    const p2 = document.getElementById('kp2').value; const i2 = document.getElementById('ki2').value; const d2 = document.getElementById('kd2').value;
-    const ao = document.getElementById('ao').value;  const ma = document.getElementById('ma').value;  const msps = document.getElementById('msps').value;
-    
-    try {
-      const resp = await fetch(`/set_pid?kp1=${p1}&ki1=${i1}&kd1=${d1}&kp2=${p2}&ki2=${i2}&kd2=${d2}&ao=${ao}&ma=${ma}&msps=${msps}`);
-      if (resp.ok) { btn.innerText = "UPDATED OK!"; btn.style.background = "#00ff88"; }
-    } catch (e) { 
-      btn.innerText = "FAILED!"; btn.style.background = "#ff4444";
-    } finally {
-      setTimeout(() => { btn.innerText = "UPDATE ALL SETTINGS"; btn.style.background = "#00d2ff"; }, 1500);
-    }
-  }
-
-  const container = document.getElementById('joystick-container');
-  const knob = document.getElementById('knob');
-
-  function move(e) {
-    if (!isDragging) return;
-    e.preventDefault();
-    let rect = container.getBoundingClientRect();
-    let clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    let clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    
-    let x = clientX - rect.left - limit;
-    let y = clientY - rect.top - limit;
-    
-    x = Math.max(-limit, Math.min(limit, x)); 
-    y = Math.max(-limit, Math.min(limit, y));
-    knob.style.transform = `translate(${x}px, ${y}px)`;
-    
-    curV = Math.round((-y / limit) * maxSpeed); 
-    curS = Math.round((x / limit) * maxSteer);
-  }
-  
-  const startJoy = (e) => { 
-    isDragging = true; 
-    move(e);
-    if(!interval) interval = setInterval(transmit, 50); 
-  };
-
-  const stopJoy = () => { 
-    isDragging = false;
-    knob.style.transform = `translate(0px, 0px)`; 
-    curV = 0; curS = 0; 
-    clearInterval(interval); 
-    interval = null; 
-    transmit(); 
-  };
-
-  function transmit() {
-    if (websocket && websocket.readyState === WebSocket.OPEN) {
-      websocket.send(`V:${curV},S:${curS}`);
-    }
-  }
-
-  container.onmousedown = container.ontouchstart = startJoy;
-  window.onmouseup = window.ontouchend = stopJoy;
-  window.onmousemove = window.ontouchmove = move;
-  </script>
-</body>
-</html>
-)rawliteral";
+// Note: HTML/JS Web UI is now located in web_page.h
 
 // --- Forward Declarations ---
 void PID_Control_Task(void *pvParameters);
 void driveMotors(float targetSpeedOutput, float loopDt);
 void readBluetoothCommands();
 void processWebInput();
+void broadcastTelemetry();
+
+// --- Real-time WebSocket Telemetry Broadcast (20 Hz) ---
+void broadcastTelemetry() {
+  if (ws.count() == 0) return;
+  if (!ws.availableForWriteAll()) return;
+
+  char buf[384];
+  float pAngle = pitchAngle;
+  float spd = currentSpeed;
+  float tgtSpd = targetSpeed;
+  float str = currentSteerOffset;
+  float mOut = motorOutput;
+  float aSet = angleSetpoint;
+  long encL = virtualEncoderCountL;
+  long encR = virtualEncoderCountR;
+  bool isBalancing = (abs(pAngle) <= 45.0f);
+
+  snprintf(buf, sizeof(buf),
+    "{\"type\":\"telemetry\",\"ms\":%lu,\"state\":\"%s\","
+    "\"pitch\":%.2f,\"setpoint\":%.2f,\"offset\":%.2f,"
+    "\"motorOut\":%.1f,\"speed\":%.1f,\"targetSpeed\":%.1f,\"steer\":%.1f,"
+    "\"encL\":%ld,\"encR\":%ld,"
+    "\"heap\":%u}",
+    millis(), isBalancing ? "BALANCING" : "FALLEN",
+    pAngle, aSet, angleOffset,
+    mOut, spd, tgtSpd, str,
+    encL, encR,
+    ESP.getFreeHeap()
+  );
+  ws.textAll(buf);
+}
 
 // --- WebSocket Event Handler ---
 void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len){
@@ -497,21 +391,16 @@ void setup() {
 }
 
 void loop() {
-  
   ws.cleanupClients(); // Keep WebSockets clean
   processWebInput();
   
-  vTaskDelay(2); 
-  
-  static unsigned long lastPrintTime = 0;
-  if (millis() - lastPrintTime >= 50) {
-    // Optional: Print to serial for debugging
-    // Serial.print("Ang: "); Serial.print(pitchAngle);
-    // Serial.print(" | Setpt: "); Serial.print(angleSetpoint);
-    // Serial.print(" | FwdSpd: "); Serial.print(currentStepperSpeed);
-    // Serial.print(" | StrOffset: "); Serial.println(currentSteerOffset);
-    lastPrintTime = millis();
+  static unsigned long lastTelemetryTime = 0;
+  if (millis() - lastTelemetryTime >= 50) {
+    lastTelemetryTime = millis();
+    broadcastTelemetry();
   }
+  
+  vTaskDelay(2); 
   delay(10);
 }
 

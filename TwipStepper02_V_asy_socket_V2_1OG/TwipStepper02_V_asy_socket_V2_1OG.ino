@@ -76,7 +76,7 @@ Kalman kalmanFilter;
 // --- Web Remote Variables ---
 volatile unsigned long lastWebCmdTime = 0;
 const float MAX_WEB_SPEED = 4000.0;
-const float MAX_WEB_STEER = 1500.0; 
+float MAX_WEB_STEER = 3000.0; 
 
 // --- Stepper Motor Pins ---
 const int STEP_PIN_L = 14; //14
@@ -123,7 +123,7 @@ float rawSteerOffset = 0.0;
 
 // User command acceleration limits (steps/s^2)
 float MAX_DRIVE_ACCEL = 4000.0; // Slew rate for forward/backward joystick commands
-float MAX_STEER_ACCEL = 4000.0; // Slew rate for steering joystick commands
+float MAX_STEER_ACCEL = 8000.0; // Slew rate for steering joystick commands
 
 // --- Inner Loop (Angle) Variables ---
 float angKp = 40.0;
@@ -293,7 +293,9 @@ void setup() {
     json += "\"kd2\":" + String(spdKd, 4) + ",";
     json += "\"ao\":" + String(angleOffset, 4) + ",";
     json += "\"ma\":" + String(MAX_ACCEL, 4) + ",";
-    json += "\"msps\":" + String(MAX_STEPS_PER_SEC, 4);
+    json += "\"msps\":" + String(MAX_STEPS_PER_SEC, 4) + ",";
+    json += "\"mstr\":" + String(MAX_WEB_STEER, 4) + ",";
+    json += "\"sta\":" + String(MAX_STEER_ACCEL, 4);
     json += "}";
     request->send(200, "application/json", json);
   });
@@ -308,6 +310,8 @@ void setup() {
     if (request->hasArg("ao")) angleOffset = request->arg("ao").toFloat();
     if (request->hasArg("ma")) MAX_ACCEL = request->arg("ma").toFloat();
     if (request->hasArg("msps")) MAX_STEPS_PER_SEC = request->arg("msps").toFloat();
+    if (request->hasArg("mstr")) MAX_WEB_STEER = request->arg("mstr").toFloat();
+    if (request->hasArg("sta")) MAX_STEER_ACCEL = request->arg("sta").toFloat();
 
     Serial.println("\n--- Web: Settings Updated ---");
     Serial.print("Inner (Balance) -> Kp: "); Serial.print(angKp, 4);
@@ -321,6 +325,8 @@ void setup() {
     Serial.print("System Config   -> Offset: "); Serial.print(angleOffset, 4);
     Serial.print(" | Max Accel: "); Serial.print(MAX_ACCEL, 4);
     Serial.print(" | Max Steps/Sec: "); Serial.println(MAX_STEPS_PER_SEC, 4);
+    Serial.print("Steering Config -> Max Steer: "); Serial.print(MAX_WEB_STEER, 4);
+    Serial.print(" | Steer Accel: "); Serial.println(MAX_STEER_ACCEL, 4);
     Serial.println("-----------------------------");
 
     request->send(200, "text/plain", "OK");

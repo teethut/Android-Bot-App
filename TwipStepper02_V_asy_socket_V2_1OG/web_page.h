@@ -68,10 +68,17 @@ const char index_html[] PROGMEM = R"rawliteral(
       <section class="panel">
         <h2>Remote Drive</h2>
         <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-          <span class="note">Sensitivity Scale</span>
+          <span class="note">Drive Speed Scale</span>
           <strong id="scaleValue" style="color:#38bdf8; font-size:0.85rem">40%</strong>
         </div>
         <input id="scale" type="range" min="10" max="100" value="40">
+        
+        <div style="display:flex; justify-content:space-between; margin-top:8px; margin-bottom:4px;">
+          <span class="note">Steer Sensitivity</span>
+          <strong id="steerScaleValue" style="color:#38bdf8; font-size:0.85rem">100%</strong>
+        </div>
+        <input id="steerScale" type="range" min="20" max="250" value="100">
+
         <div id="pad"><div id="knob"></div></div>
         <div id="driveText" class="note" style="text-align:center; font-weight:600; color:#cbd5e1">V: 0 &middot; S: 0 steps/s</div>
       </section>
@@ -99,6 +106,12 @@ const char index_html[] PROGMEM = R"rawliteral(
           <div class="pid-cell"><label>Offset (&deg;)</label><input type="text" id="ao" inputmode="decimal"></div>
           <div class="pid-cell"><label>Max Accel</label><input type="text" id="ma" inputmode="decimal"></div>
           <div class="pid-cell"><label>Max Spd</label><input type="text" id="msps" inputmode="decimal"></div>
+        </div>
+
+        <h3>Steering Tuning</h3>
+        <div class="pid-grid" style="grid-template-columns: 1fr 1fr;">
+          <div class="pid-cell"><label>Max Steer</label><input type="text" id="mstr" inputmode="decimal"></div>
+          <div class="pid-cell"><label>Steer Accel</label><input type="text" id="sta" inputmode="decimal"></div>
         </div>
 
         <div class="row" style="margin-top:10px;">
@@ -234,6 +247,9 @@ const char index_html[] PROGMEM = R"rawliteral(
         $('kp1').value = d.kp1; $('ki1').value = d.ki1; $('kd1').value = d.kd1;
         $('kp2').value = d.kp2; $('ki2').value = d.ki2; $('kd2').value = d.kd2;
         $('ao').value = d.ao;   $('ma').value = d.ma;   $('msps').value = d.msps;
+        $('mstr').value = d.mstr || 2500;
+        $('sta').value = d.sta || 8000;
+        maxRawSteer = Number(d.mstr) || 2500;
         $('pidStatus').textContent = 'Settings loaded.';
         $('pidStatus').style.color = '#4ade80';
       }).catch(e => {
@@ -248,10 +264,12 @@ const char index_html[] PROGMEM = R"rawliteral(
     const p1 = $('kp1').value, i1 = $('ki1').value, d1 = $('kd1').value;
     const p2 = $('kp2').value, i2 = $('ki2').value, d2 = $('kd2').value;
     const ao = $('ao').value,  ma = $('ma').value,  msps = $('msps').value;
+    const mstr = $('mstr').value, sta = $('sta').value;
 
     try {
-      const resp = await fetch(`/set_pid?kp1=${p1}&ki1=${i1}&kd1=${d1}&kp2=${p2}&ki2=${i2}&kd2=${d2}&ao=${ao}&ma=${ma}&msps=${msps}`);
+      const resp = await fetch(`/set_pid?kp1=${p1}&ki1=${i1}&kd1=${d1}&kp2=${p2}&ki2=${i2}&kd2=${d2}&ao=${ao}&ma=${ma}&msps=${msps}&mstr=${mstr}&sta=${sta}`);
       if (resp.ok) {
+        maxRawSteer = Number(mstr) || 2500;
         btn.innerText = 'UPDATED OK!'; btn.style.background = '#16a34a';
         $('pidStatus').textContent = 'Parameters updated successfully in RAM!';
         $('pidStatus').style.color = '#4ade80';
@@ -273,17 +291,14 @@ const char index_html[] PROGMEM = R"rawliteral(
   let pointer = null;
   let joyX = 0, joyY = 0;
   const MAX_RAW_SPEED = 3000;
-  const MAX_RAW_STEER = 800;
-
-  function calcExpo(val) {
-    return Math.sign(val) * Math.pow(Math.abs(val), 1.4);
-  }
+  let maxRawSteer = 2500;
 
   function renderJoy() {
     knob.style.transform = `translate(-50%,-50%) translate(${joyX * 75}px, ${joyY * 75}px)`;
-    const scale = Number($('scale').value) / 100;
-    const curV = Math.round(-calcExpo(joyY) * MAX_RAW_SPEED * scale);
-    const curS = Math.round(calcExpo(joyX) * MAX_RAW_STEER * scale);
+    const driveScale = Number($('scale').value) / 100;
+    const steerScale = Number($('steerScale').value) / 100;
+    const curV = Math.round(-Math.sign(joyY) * Math.pow(Math.abs(joyY), 1.3) * MAX_RAW_SPEED * driveScale);
+    const curS = Math.round(Math.sign(joyX) * Math.pow(Math.abs(joyX), 1.05) * maxRawSteer * steerScale);
     $('driveText').textContent = `V: ${curV} \u00B7 S: ${curS} steps/s`;
   }
 
@@ -291,9 +306,10 @@ const char index_html[] PROGMEM = R"rawliteral(
 
   function transmitDrive() {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      const scale = Number($('scale').value) / 100;
-      const curV = Math.round(-calcExpo(joyY) * MAX_RAW_SPEED * scale);
-      const curS = Math.round(calcExpo(joyX) * MAX_RAW_STEER * scale);
+      const driveScale = Number($('scale').value) / 100;
+      const steerScale = Number($('steerScale').value) / 100;
+      const curV = Math.round(-Math.sign(joyY) * Math.pow(Math.abs(joyY), 1.3) * MAX_RAW_SPEED * driveScale);
+      const curS = Math.round(Math.sign(joyX) * Math.pow(Math.abs(joyX), 1.05) * maxRawSteer * steerScale);
       ws.send(`V:${curV},S:${curS}`);
     }
   }
@@ -346,6 +362,10 @@ const char index_html[] PROGMEM = R"rawliteral(
 
   $('scale').oninput = () => {
     $('scaleValue').textContent = $('scale').value + '%';
+    renderJoy();
+  };
+  $('steerScale').oninput = () => {
+    $('steerScaleValue').textContent = $('steerScale').value + '%';
     renderJoy();
   };
 

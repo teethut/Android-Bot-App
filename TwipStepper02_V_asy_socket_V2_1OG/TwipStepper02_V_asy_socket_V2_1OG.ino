@@ -119,6 +119,11 @@ volatile bool motorsEnabledR = false;
 
 float currentStepperSpeed = 0.0;
 float currentSteerOffset = 0.0;
+float rawSteerOffset = 0.0;
+
+// User command acceleration limits (steps/s^2)
+float MAX_DRIVE_ACCEL = 4000.0; // Slew rate for forward/backward joystick commands
+float MAX_STEER_ACCEL = 4000.0; // Slew rate for steering joystick commands
 
 // --- Inner Loop (Angle) Variables ---
 float angKp = 40.0;
@@ -133,6 +138,7 @@ float angleOffset = 6;
 float spdKp = -0.0015; 
 float spdKi = -0.0000;
 float spdKd = 0.00002;
+float rawTargetSpeed = 0;
 float targetSpeed = 0;
 float currentSpeed = 0;
 float spdError = 0.0, spdIntegral = 0.0, spdDerivative = 0.0, spdOutput = 0.0;
@@ -196,11 +202,11 @@ void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventT
       if(msg.startsWith("V:")){
         int commaIndex = msg.indexOf(',');
         if(commaIndex > 0){
-          targetSpeed = msg.substring(2, commaIndex).toFloat();
-          currentSteerOffset = msg.substring(commaIndex + 3).toFloat();
+          rawTargetSpeed = msg.substring(2, commaIndex).toFloat();
+          rawSteerOffset = msg.substring(commaIndex + 3).toFloat();
           
-          targetSpeed = constrain(targetSpeed, -MAX_WEB_SPEED, MAX_WEB_SPEED);
-          currentSteerOffset = constrain(currentSteerOffset, -MAX_WEB_STEER, MAX_WEB_STEER);
+          rawTargetSpeed = constrain(rawTargetSpeed, -MAX_WEB_SPEED, MAX_WEB_SPEED);
+          rawSteerOffset = constrain(rawSteerOffset, -MAX_WEB_STEER, MAX_WEB_STEER);
           
           lastWebCmdTime = millis();
         }
@@ -408,8 +414,8 @@ void loop() {
 void processWebInput() {
   // If no ping from the web joystick in 500ms (browser closed/lost connection)
   if (millis() - lastWebCmdTime > 500) {
-    targetSpeed = 0;
-    currentSteerOffset = 0;
+    rawTargetSpeed = 0.0;
+    rawSteerOffset = 0.0;
   }
 }
 
@@ -459,6 +465,12 @@ void PID_Control_Task(void *pvParameters) {
           lastEncoderCountForSpeed = currentEnc;
 
           currentSpeed = (0.5 * rawSpeed) + (0.5 * currentSpeed); 
+
+          // Smoothly ramp targetSpeed towards user requested rawTargetSpeed
+          float maxDriveChange = MAX_DRIVE_ACCEL * dtSum;
+          if (rawTargetSpeed > targetSpeed + maxDriveChange) targetSpeed += maxDriveChange;
+          else if (rawTargetSpeed < targetSpeed - maxDriveChange) targetSpeed -= maxDriveChange;
+          else targetSpeed = rawTargetSpeed;
 
           spdError = targetSpeed - currentSpeed;
           spdIntegral = constrain(spdIntegral + (spdError * dtSum), -3000, 3000);
@@ -511,9 +523,19 @@ void driveMotors(float targetSpeedOutput, float loopDt) {
   else if (targetSpeedOutput < currentStepperSpeed - maxChange) currentStepperSpeed -= maxChange;
   else currentStepperSpeed = targetSpeedOutput;
 
+  // Slew the steering offset smoothly
+  float maxSteerChange = MAX_STEER_ACCEL * loopDt;
+  if (rawSteerOffset > currentSteerOffset + maxSteerChange) currentSteerOffset += maxSteerChange;
+  else if (rawSteerOffset < currentSteerOffset - maxSteerChange) currentSteerOffset -= maxSteerChange;
+  else currentSteerOffset = rawSteerOffset;
+
+  // Dynamic steering headroom: protect balance authority so steering cannot saturate motors
+  float headroom = fmaxf(0.0f, MAX_STEPS_PER_SEC - fabsf(currentStepperSpeed));
+  float safeSteer = constrain(currentSteerOffset, -headroom, headroom);
+
   // Mix the Steering Offset (Left gets positive offset, Right gets negative)
-  float speedL = currentStepperSpeed + currentSteerOffset;
-  float speedR = currentStepperSpeed - currentSteerOffset;
+  float speedL = currentStepperSpeed + safeSteer;
+  float speedR = currentStepperSpeed - safeSteer;
 
   // --- Process LEFT Motor ---
   portENTER_CRITICAL(&timerMuxL);

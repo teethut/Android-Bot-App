@@ -275,11 +275,15 @@ const char index_html[] PROGMEM = R"rawliteral(
   const MAX_RAW_SPEED = 3000;
   const MAX_RAW_STEER = 800;
 
+  function calcExpo(val) {
+    return Math.sign(val) * Math.pow(Math.abs(val), 1.4);
+  }
+
   function renderJoy() {
     knob.style.transform = `translate(-50%,-50%) translate(${joyX * 75}px, ${joyY * 75}px)`;
     const scale = Number($('scale').value) / 100;
-    const curV = Math.round(-joyY * MAX_RAW_SPEED * scale);
-    const curS = Math.round(joyX * MAX_RAW_STEER * scale);
+    const curV = Math.round(-calcExpo(joyY) * MAX_RAW_SPEED * scale);
+    const curS = Math.round(calcExpo(joyX) * MAX_RAW_STEER * scale);
     $('driveText').textContent = `V: ${curV} \u00B7 S: ${curS} steps/s`;
   }
 
@@ -288,8 +292,8 @@ const char index_html[] PROGMEM = R"rawliteral(
   function transmitDrive() {
     if (ws && ws.readyState === WebSocket.OPEN) {
       const scale = Number($('scale').value) / 100;
-      const curV = Math.round(-joyY * MAX_RAW_SPEED * scale);
-      const curS = Math.round(joyX * MAX_RAW_STEER * scale);
+      const curV = Math.round(-calcExpo(joyY) * MAX_RAW_SPEED * scale);
+      const curS = Math.round(calcExpo(joyX) * MAX_RAW_STEER * scale);
       ws.send(`V:${curV},S:${curS}`);
     }
   }
